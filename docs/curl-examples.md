@@ -16,12 +16,12 @@ export BASE=http://localhost:3000/v1
 # Service advisor (STAFF) at the seeded dealership.
 export STAFF=$(printf '%s' \
   '{"dealershipId":"01900000-0000-7000-8000-00000000d001","role":"STAFF"}' \
-  | basenc --base64url | tr -d '=')
+  | basenc --base64url -w0 | tr -d '=')
 
 # Self-service customer — reads are further restricted to their own rows.
 export CUSTOMER=$(printf '%s' \
   '{"dealershipId":"01900000-0000-7000-8000-00000000d001","role":"CUSTOMER","customerId":"01900000-0000-7000-8000-00000000ee01"}' \
-  | basenc --base64url | tr -d '=')
+  | basenc --base64url -w0 | tr -d '=')
 ```
 
 ## Reference data

@@ -12,6 +12,6 @@ import { CorrelationIdMiddleware } from './correlation-id.middleware';
 @Module({})
 export class CorrelationModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(CorrelationIdMiddleware).forRoutes('*path');
+    consumer.apply(CorrelationIdMiddleware).forRoutes('{*path}');
   }
 }

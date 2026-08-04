@@ -1,7 +1,7 @@
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module';
-import { API_PREFIX } from '../../src/openapi';
+import { API_PREFIX, buildOpenApiDocument, setupSwagger } from '../../src/openapi';
 import { AllExceptionsFilter } from '../../src/common/errors/all-exceptions.filter';
 import { encodePrincipal } from '../../src/common/auth/tenant.guard';
 import { PrincipalRole } from '../../src/common/auth/principal';
@@ -35,6 +35,9 @@ export async function createTestApp(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
   app.useGlobalFilters(new AllExceptionsFilter());
+  // Mounted here too, so the harness matches `main.ts` and the contract test can assert that
+  // /docs is actually served rather than only that the committed file exists.
+  setupSwagger(app, buildOpenApiDocument(app));
 
   await app.init();
   // Bind an ephemeral port rather than stopping at init(). Supertest calls `server.listen(0)`

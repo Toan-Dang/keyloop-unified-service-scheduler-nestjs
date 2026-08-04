@@ -1,5 +1,23 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import type { AllocatedAppointment } from '../allocation.service';
+
+/** The row shape every appointment read returns. */
+export interface AppointmentRow {
+  id: string;
+  dealershipId: string;
+  customerId: string;
+  vehicleId: string;
+  serviceTypeId: string;
+  technicianId: string;
+  serviceBayId: string;
+  startTime: Date;
+  endTime: Date;
+  status: 'CONFIRMED' | 'CANCELLED';
+  idempotencyKey?: string | null;
+  requestHash?: string | null;
+  cancelledAt?: Date | null;
+  cancelReason?: string | null;
+  createdAt: Date;
+}
 
 export class AppointmentResponse {
   @ApiProperty({ format: 'uuid' })
@@ -23,12 +41,14 @@ export class AppointmentResponse {
   @ApiProperty({ format: 'uuid', description: 'The service bay the system allocated.' })
   serviceBayId!: string;
 
-  @ApiProperty({ format: 'date-time', description: 'Window start (UTC).' })
+  @ApiProperty({ format: 'date-time', description: 'Window start (UTC), inclusive.' })
   startTime!: string;
 
   @ApiProperty({
     format: 'date-time',
-    description: 'Window end (UTC) = start + the service type’s duration. Exclusive.',
+    description:
+      'Window end (UTC) = start + the service type’s duration. **Exclusive** — an appointment ' +
+      'ending at 10:00 does not conflict with one starting at 10:00.',
   })
   endTime!: string;
 
@@ -38,7 +58,10 @@ export class AppointmentResponse {
   @ApiPropertyOptional({ format: 'date-time', nullable: true })
   cancelledAt?: string | null;
 
-  static from(appointment: AllocatedAppointment): AppointmentResponse {
+  @ApiPropertyOptional({ nullable: true })
+  cancelReason?: string | null;
+
+  static from(appointment: AppointmentRow): AppointmentResponse {
     return {
       id: appointment.id,
       status: appointment.status,
@@ -50,6 +73,21 @@ export class AppointmentResponse {
       startTime: appointment.startTime.toISOString(),
       endTime: appointment.endTime.toISOString(),
       createdAt: appointment.createdAt.toISOString(),
+      cancelledAt: appointment.cancelledAt ? appointment.cancelledAt.toISOString() : null,
+      cancelReason: appointment.cancelReason ?? null,
     };
   }
+}
+
+export class AppointmentPageResponse {
+  @ApiProperty({ type: [AppointmentResponse] })
+  items!: AppointmentResponse[];
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Opaque keyset cursor for the next page, or null when this is the last page. Pass it back ' +
+      'as `?cursor=`.',
+  })
+  nextCursor!: string | null;
 }

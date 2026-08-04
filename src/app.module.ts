@@ -14,6 +14,7 @@ import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
 import { HttpMetricsInterceptor } from './common/metrics/http-metrics.interceptor';
 import { loadConfiguration } from './config/configuration';
 import { PrismaModule } from './prisma/prisma.module';
+import { ResourcesModule } from './resources/resources.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { PrismaModule } from './prisma/prisma.module';
     CommonModule,
     AvailabilityModule,
     BookingModule,
+    ResourcesModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

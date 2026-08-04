@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { MetricsService } from '../common/metrics/metrics.service';
+import {
+  dealershipWithinHours,
+  resourceFree,
+  technicianQualified,
+  technicianWithinHours,
+} from './candidate-sql';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Sql } from '../prisma/tx';
 
@@ -52,26 +58,13 @@ export class AvailabilityService {
           JOIN technicians  t ON t.dealership_id = d.id AND t.is_active
           JOIN service_bays b ON b.dealership_id = d.id AND b.is_active
          WHERE d.id = $1::uuid
-           -- Qualification: the technician's skills must be a SUPERSET of what the service
-           -- requires. GIN-indexed containment (db §4).
-           AND t.skills @> $2::text[]
-           -- The window must fit inside a single contiguous range of BOTH the technician's shift
-           -- and the dealership's opening hours (§6.7).
-           AND hours_contains(t.working_hours, $3::timestamptz, $4::timestamptz, d.timezone)
-           AND hours_contains(d.opening_hours, $3::timestamptz, $4::timestamptz, d.timezone)
-           -- Mirrors the exclusion constraints, but advisory only — the constraint is the
-           -- authority (§6.1). Uses the same && operator over the same generated range, so the
-           -- advisory answer and the authoritative one at least agree on the arithmetic.
-           AND NOT EXISTS (
-                 SELECT 1 FROM appointments a
-                  WHERE a.status = 'CONFIRMED'
-                    AND a.technician_id = t.id
-                    AND a.during && tstzrange($3::timestamptz, $4::timestamptz, '[)'))
-           AND NOT EXISTS (
-                 SELECT 1 FROM appointments a
-                  WHERE a.status = 'CONFIRMED'
-                    AND a.service_bay_id = b.id
-                    AND a.during && tstzrange($3::timestamptz, $4::timestamptz, '[)'))
+           AND ${technicianQualified('t', '$2')}
+           AND ${technicianWithinHours('t', '$3::timestamptz', '$4::timestamptz', 'd.timezone')}
+           AND ${dealershipWithinHours('d', '$3::timestamptz', '$4::timestamptz', 'd.timezone')}
+           AND ${resourceFree('technician_id', 't', '$3::timestamptz', '$4::timestamptz')}
+           AND ${resourceFree('service_bay_id', 'b', '$3::timestamptz', '$4::timestamptz')}
+         -- Deterministic, and not cosmetic: every request walking candidates in the same order
+         -- gives a consistent lock-acquisition order, which is what keeps 40P01 rare (§6.2).
          ORDER BY t.id, b.id
         `,
         query.dealershipId,

@@ -1,0 +1,241 @@
+// Unified Service Scheduler — Prisma schema.
+// Source of truth: docs/database-design.md §2 (tables) and §3 (DDL).
+//
+// DIVISION OF LABOUR (db §5.8, CLAUDE.md):
+//   Prisma owns tables, columns, relations and the generated client.
+//   Everything beyond Prisma's declarative surface lives in the hand-written SQL migration
+//   `prisma/migrations/**/migration.sql`:
+//     - CREATE EXTENSION btree_gist
+//     - the generated `during` column           (tstzrange(start_time, end_time, '[)') STORED)
+//     - the two partial EXCLUDE constraints     (no_technician_overlap / no_bay_overlap)
+//     - the partial unique (dealership_id, idempotency_key)
+//     - the partial reminder / outbox indexes
+//     - CHECK constraints
+//     - all supporting indexes (§4)
+//
+// Because those objects are invisible to Prisma's declarative model, **use `prisma migrate
+// deploy` (npm run db:migrate)**. `prisma migrate dev` would read them as drift and try to drop
+// them — which would silently remove the invariant this whole system exists to guarantee.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+// Prisma 7: the connection URL lives in `prisma.config.ts` (for Migrate) and reaches the client
+// through the `@prisma/adapter-pg` driver adapter — it is no longer a schema property.
+datasource db {
+  provider = "postgresql"
+}
+
+/// CONFIRMED the instant the row is written (there is no PENDING state — availability is decided
+/// synchronously by the exclusion constraint). CANCELLED is terminal and frees the slot because
+/// both EXCLUDE constraints are partial on status = 'CONFIRMED'.
+enum AppointmentStatus {
+  CONFIRMED
+  CANCELLED
+
+  @@map("appointment_status")
+}
+
+enum OutboxStatus {
+  PENDING
+  SENT
+  FAILED
+
+  @@map("outbox_status")
+}
+
+/// The tenant. Carries the timezone and opening hours used to evaluate availability (§6.7).
+model Dealership {
+  id       String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name     String @db.VarChar(255)
+  /// IANA timezone, e.g. "Asia/Ho_Chi_Minh". Interprets `openingHours` and presents UTC locally.
+  timezone String @db.VarChar(64)
+  /// {"mon":[["08:00","18:00"]], "sat":[["08:00","12:00"]], "sun":[]} — local wall-clock ranges.
+  openingHours Json @map("opening_hours")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customers    Customer[]
+  vehicles     Vehicle[]
+  serviceTypes ServiceType[]
+  technicians  Technician[]
+  serviceBays  ServiceBay[]
+  appointments Appointment[]
+
+  @@map("dealerships")
+}
+
+model Customer {
+  id           String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// Tenant boundary — denormalized onto every tenant-owned table (db §5.11).
+  dealershipId String @map("dealership_id") @db.Uuid
+  name         String @db.VarChar(255)
+  /// Unique per dealership, not globally: the same person may be a customer at two dealerships.
+  email        String @db.VarChar(255)
+  phone        String? @db.VarChar(20)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  dealership   Dealership    @relation(fields: [dealershipId], references: [id])
+  vehicles     Vehicle[]
+  appointments Appointment[]
+
+  @@map("customers")
+}
+
+model Vehicle {
+  id           String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  dealershipId String @map("dealership_id") @db.Uuid
+  /// Unique per dealership — a VIN may legitimately appear in two dealerships' records.
+  vin          String @db.VarChar(17)
+  make         String @db.VarChar(64)
+  model        String @db.VarChar(64)
+  year         Int    @db.SmallInt
+  customerId   String @map("customer_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  dealership   Dealership    @relation(fields: [dealershipId], references: [id])
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  appointments Appointment[]
+
+  @@map("vehicles")
+}
+
+/// Defines what a service is: how long it takes and which skills it needs. Duration is
+/// server-authoritative so a client cannot ask for an arbitrary-length slot (§2 assumption 1).
+model ServiceType {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  dealershipId    String   @map("dealership_id") @db.Uuid
+  name            String   @db.VarChar(128)
+  /// CHECK (duration_minutes > 0) in the SQL migration — a zero duration would trip
+  /// appointments_time_valid on every booking, so it is forbidden at the source.
+  durationMinutes Int      @map("duration_minutes")
+  /// A technician qualifies iff technicians.skills @> required_skills.
+  requiredSkills  String[] @default([]) @map("required_skills")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  dealership   Dealership    @relation(fields: [dealershipId], references: [id])
+  appointments Appointment[]
+
+  @@map("service_types")
+}
+
+/// A bookable human resource — one of the two resources guarded against double-booking.
+model Technician {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  dealershipId String   @map("dealership_id") @db.Uuid
+  name         String   @db.VarChar(255)
+  /// GIN-indexed; matched with @> containment against ServiceType.requiredSkills.
+  skills       String[] @default([])
+  /// Same JSONB shape as dealerships.opening_hours; an appointment must fit inside both.
+  workingHours Json     @map("working_hours")
+  /// Soft on/off switch — deactivation preserves historical appointment references.
+  isActive     Boolean  @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  dealership   Dealership    @relation(fields: [dealershipId], references: [id])
+  appointments Appointment[]
+
+  @@map("technicians")
+}
+
+/// A bookable physical resource. Bays have no hours of their own — they inherit the
+/// dealership's opening hours (db §2.6).
+model ServiceBay {
+  id           String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  dealershipId String  @map("dealership_id") @db.Uuid
+  name         String  @db.VarChar(64)
+  isActive     Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  dealership   Dealership    @relation(fields: [dealershipId], references: [id])
+  appointments Appointment[]
+
+  @@map("service_bays")
+}
+
+/// The transactional record — the object protected against overlap. The only table under
+/// concurrent write pressure and the only one carrying exclusion constraints (db §3).
+model Appointment {
+  id            String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  dealershipId  String @map("dealership_id") @db.Uuid
+  customerId    String @map("customer_id") @db.Uuid
+  vehicleId     String @map("vehicle_id") @db.Uuid
+  serviceTypeId String @map("service_type_id") @db.Uuid
+  technicianId  String @map("technician_id") @db.Uuid
+  serviceBayId  String @map("service_bay_id") @db.Uuid
+
+  startTime DateTime @map("start_time") @db.Timestamptz(6)
+  /// = start_time + service_type.duration_minutes. App-enforced (db §5.9); the DB enforces only
+  /// end_time > start_time.
+  endTime   DateTime @map("end_time") @db.Timestamptz(6)
+
+  /// GENERATED ALWAYS AS (tstzrange(start_time, end_time, '[)')) STORED — created by the raw-SQL
+  /// migration. Declared here (optional, Unsupported) purely so Prisma knows the column exists;
+  /// it is never written by the client. This is the column both EXCLUDE constraints operate on.
+  during Unsupported("tstzrange")?
+
+  status AppointmentStatus @default(CONFIRMED)
+
+  /// Unique per dealership among non-null values — the durable idempotency backstop (§6.3).
+  idempotencyKey String? @map("idempotency_key") @db.VarChar(255)
+  /// SHA-256 over the RFC 8785 (JCS) canonical request body. Persisted so the same-key/
+  /// different-body 422 check still works with Redis cold (db §5.4).
+  requestHash    String? @map("request_hash") @db.Char(64)
+
+  cancelledAt    DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  cancelReason   String?   @map("cancel_reason")
+  /// Set when the T-24h reminder has been claimed; makes the reminder scan idempotent (§5.3).
+  reminderSentAt DateTime? @map("reminder_sent_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  dealership  Dealership  @relation(fields: [dealershipId], references: [id])
+  customer    Customer    @relation(fields: [customerId], references: [id])
+  vehicle     Vehicle     @relation(fields: [vehicleId], references: [id])
+  serviceType ServiceType @relation(fields: [serviceTypeId], references: [id])
+  technician  Technician  @relation(fields: [technicianId], references: [id])
+  serviceBay  ServiceBay  @relation(fields: [serviceBayId], references: [id])
+
+  @@map("appointments")
+}
+
+/// Transactional outbox (ADR-006). A row is written in the SAME transaction as the appointment
+/// it announces, which is what makes "appointment persisted" and "notification will be
+/// delivered" a single atomic fact. Deliberately has no `updated_at` — it is an
+/// append-and-purge operational log, not audited business data (db §2.8).
+model Outbox {
+  /// Doubles as the `event_id` consumers dedupe on (at-least-once delivery).
+  id            String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// Cross-tenant operational table, but each row carries its tenant for filtering + RLS.
+  dealershipId  String       @map("dealership_id") @db.Uuid
+  aggregateType String       @map("aggregate_type") @db.VarChar(64)
+  aggregateId   String       @map("aggregate_id") @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(64)
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  /// Counts *failures*, not claims. Leasing never touches it (db §2.8).
+  attempts      Int          @default(0) @db.SmallInt
+  /// Next eligible time. The claim leases the row by pushing this forward.
+  availableAt   DateTime     @default(now()) @map("available_at") @db.Timestamptz(6)
+  publishedAt   DateTime?    @map("published_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("outbox")
+}

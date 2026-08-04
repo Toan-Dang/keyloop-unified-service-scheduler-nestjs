@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  static:
+    name: Lint · typecheck · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+  test:
+    name: Unit · integration · concurrency · e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      # The GitHub runner has a real Docker daemon, so Testcontainers starts
+      # postgres:18-alpine itself — the EXCLUDE constraint genuinely runs.
+      - name: Integration tests (Testcontainers + real PostgreSQL)
+        run: npm run test:integration
+
+      - name: Concurrency proof (the signature test)
+        run: npm run test:concurrency
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+  contract:
+    name: OpenAPI contract is committed and current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run openapi:generate
+      - name: Fail if openapi.yaml is stale
+        run: git diff --exit-code -- openapi.yaml

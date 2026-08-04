@@ -1,0 +1,55 @@
+# Local-first topology (docs/infrastructure-local.drawio).
+# No AWS, no LocalStack — Postgres + Redis are the only infrastructure the app needs.
+# The async notification tail runs in-process (ADR-005 local adapter).
+
+services:
+  postgres:
+    # PostgreSQL 18 — required for native uuidv7() and btree_gist exclusion constraints (ADR-001).
+    image: postgres:18-alpine
+    container_name: uss-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-scheduler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scheduler_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-scheduler}
+      # Deterministic collation so ORDER BY in tests matches CI.
+      POSTGRES_INITDB_ARGS: '--locale=C.UTF-8 --encoding=UTF8'
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      # PostgreSQL 18 images want a single mount at /var/lib/postgresql (NOT .../data) so the
+      # data lands in a versioned subdirectory and `pg_upgrade --link` can cross the mount.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-scheduler} -d ${POSTGRES_DB:-scheduler}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    command:
+      # Small local tuning; the invariant does not depend on any of these.
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - log_min_duration_statement=500
+
+  redis:
+    # Redis 8 — idempotency fast path only. Bookings stay correct with Redis down (§10.1).
+    image: redis:8-alpine
+    container_name: uss-redis
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    command: ['redis-server', '--appendonly', 'yes', '--save', '']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

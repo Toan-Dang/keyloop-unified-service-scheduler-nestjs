@@ -1,0 +1,25 @@
+node_modules/
+dist/
+generated/
+coverage/
+*.tsbuildinfo
+
+# env / secrets — never commit
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+logs/
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# scratch
+tmp/
+test/.tmp/

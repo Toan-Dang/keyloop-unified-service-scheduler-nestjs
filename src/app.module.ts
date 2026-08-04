@@ -13,6 +13,7 @@ import { TenantGuard } from './common/auth/tenant.guard';
 import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
 import { HttpMetricsInterceptor } from './common/metrics/http-metrics.interceptor';
 import { loadConfiguration } from './config/configuration';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ResourcesModule } from './resources/resources.module';
 
@@ -68,6 +69,7 @@ import { ResourcesModule } from './resources/resources.module';
     AvailabilityModule,
     BookingModule,
     ResourcesModule,
+    NotificationsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

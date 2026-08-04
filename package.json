@@ -1,7 +1,7 @@
 {
   "name": "unified-service-scheduler",
   "version": "1.0.0",
-  "description": "Unified Service Scheduler — resource-constrained dealership service booking with DB-enforced no-double-booking",
+  "description": "Unified Service Scheduler \u2014 resource-constrained dealership service booking with DB-enforced no-double-booking",
   "author": "Dang Phuc Toan",
   "private": true,
   "license": "UNLICENSED",
@@ -24,12 +24,12 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
-    "test": "jest --config test/jest.config.ts",
+    "test": "jest --config test/jest.config.ts --runInBand",
     "test:unit": "jest --config test/jest.config.ts --selectProjects unit",
-    "test:integration": "jest --config test/jest.config.ts --selectProjects integration",
-    "test:concurrency": "jest --config test/jest.config.ts --selectProjects concurrency",
-    "test:e2e": "jest --config test/jest.config.ts --selectProjects e2e",
-    "test:cov": "jest --config test/jest.config.ts --coverage",
+    "test:integration": "jest --config test/jest.config.ts --selectProjects integration --runInBand",
+    "test:concurrency": "jest --config test/jest.config.ts --selectProjects concurrency --runInBand",
+    "test:e2e": "jest --config test/jest.config.ts --selectProjects e2e --runInBand",
+    "test:cov": "jest --config test/jest.config.ts --runInBand --coverage",
     "prisma:seed": "tsx prisma/seed.ts"
   },
   "prisma": {

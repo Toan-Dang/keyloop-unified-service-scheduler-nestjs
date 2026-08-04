@@ -14,11 +14,12 @@ import { readTestEnv } from './test-database';
  * the same wiring a reviewer gets from `npm run start:dev`.
  */
 export async function createTestApp(
-  overrides: { outboxRelay?: boolean; reminderCron?: boolean } = {},
+  overrides: { outboxRelay?: boolean; reminderCron?: boolean; redisUrl?: string } = {},
 ): Promise<INestApplication> {
   const env = readTestEnv();
   process.env.DATABASE_URL = env.databaseUrl;
-  process.env.REDIS_URL = env.redisUrl;
+  // A suite can point this at a dead port to prove bookings stay correct with Redis down.
+  process.env.REDIS_URL = overrides.redisUrl ?? env.redisUrl;
   process.env.NODE_ENV = 'test';
   process.env.LOG_LEVEL = process.env.TEST_LOG_LEVEL ?? 'silent';
   // Background workers are opt-in per suite so their polling cannot perturb a timing-sensitive

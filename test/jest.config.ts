@@ -25,6 +25,11 @@ const common = {
  * Four suites, deliberately separated so the fast ones can run on every save and the slow,
  * container-backed ones run on demand (§12):
  *
+ * `maxWorkers` is a GLOBAL Jest option, not a per-project one — setting it here would be
+ * silently ignored. Every suite below except `unit` shares ONE database, so the npm scripts pass
+ * `--runInBand`. Without it, two spec files land in separate workers and truncate each other's
+ * rows mid-test, which shows up as a booking that "succeeded" against an empty table.
+ *
  *   unit         — pure logic (hours arithmetic, half-open boundaries, DST enumeration). No I/O.
  *   integration  — repository + the exclusion constraints against a REAL PostgreSQL.
  *   concurrency  — the signature test: N parallel bookings for one slot ⇒ exactly one 201.
@@ -46,6 +51,7 @@ const config: Config = {
       testMatch: ['<rootDir>/test/integration/**/*.spec.ts'],
       globalSetup: '<rootDir>/test/support/global-setup.ts',
       globalTeardown: '<rootDir>/test/support/global-teardown.ts',
+      setupFilesAfterEnv: ['<rootDir>/test/support/jest.setup.ts'],
       testTimeout: 120_000,
     },
     {
@@ -54,9 +60,8 @@ const config: Config = {
       testMatch: ['<rootDir>/test/concurrency/**/*.spec.ts'],
       globalSetup: '<rootDir>/test/support/global-setup.ts',
       globalTeardown: '<rootDir>/test/support/global-teardown.ts',
+      setupFilesAfterEnv: ['<rootDir>/test/support/jest.setup.ts'],
       testTimeout: 300_000,
-      // The whole point is racing requests against one another, not racing test files.
-      maxWorkers: 1,
     },
     {
       ...common,
@@ -64,8 +69,8 @@ const config: Config = {
       testMatch: ['<rootDir>/test/e2e/**/*.e2e-spec.ts'],
       globalSetup: '<rootDir>/test/support/global-setup.ts',
       globalTeardown: '<rootDir>/test/support/global-teardown.ts',
+      setupFilesAfterEnv: ['<rootDir>/test/support/jest.setup.ts'],
       testTimeout: 180_000,
-      maxWorkers: 1,
     },
   ],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.spec.ts', '!src/main.ts'],

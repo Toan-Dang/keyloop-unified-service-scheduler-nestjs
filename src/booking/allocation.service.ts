@@ -245,6 +245,36 @@ export class AllocationService {
           }
         }
 
+        // -----------------------------------------------------------------------------------
+        // Candidates exhausted — but before calling it a conflict, check whether the thing that
+        // beat us was our OWN concurrent twin.
+        //
+        // §6.3 says a same-key retry "hits 23505 and returns the existing appointment". That is
+        // not what PostgreSQL does when both retries target the same slot: the INSERT violates
+        // the exclusion constraint AND the idempotency unique index, and PostgreSQL reports
+        // whichever index has the lower OID — the exclusion constraint, created first. So the
+        // loop sees 23P01, treats it as a lost race, exhausts its candidates, and would answer
+        // 409 to a client that is merely retrying its own booking.
+        //
+        // Re-reading the key here restores the documented guarantee regardless of which
+        // constraint fired. Under READ COMMITTED each statement takes a fresh snapshot, so the
+        // twin's committed row is visible even though our transaction started before it.
+        // -----------------------------------------------------------------------------------
+        if (command.idempotencyKey) {
+          const twin = await this.findByIdempotencyKey(tx, command);
+          if (twin) {
+            this.logger.log(
+              {
+                correlationId: getCorrelationId(),
+                appointmentId: twin.id,
+                outcome: 'idempotent-replay',
+              },
+              'Candidates exhausted, but this request had already committed concurrently',
+            );
+            return { outcome: 'idempotent-replay', appointment: twin, candidatesTried: tried };
+          }
+        }
+
         // Nothing was inserted, so this commits an empty transaction. The caller maps it to
         // 409 NO_AVAILABILITY — a genuine state conflict, not a validation failure (§7.1).
         this.logger.log(

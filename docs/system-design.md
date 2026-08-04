@@ -479,12 +479,32 @@ attempt_booking():                      -- may be retried on 40P01 (whole-tx res
 
 | SQLSTATE | Meaning | Handling | Why |
 |---|---|---|---|
-| `23P01` | exclusion_violation — another request won the race for this technician/bay window | `ROLLBACK TO SAVEPOINT`, try next candidate; if exhausted → `409 NO_AVAILABILITY` | the *point* of the loop |
+| `23P01` | exclusion_violation — another request won the race for this technician/bay window | `ROLLBACK TO SAVEPOINT`, try next candidate; if exhausted → re-check the idempotency key (see below), else `409 NO_AVAILABILITY` | the *point* of the loop |
 | `23505` | unique_violation on `(dealership_id, idempotency_key)` — a concurrent retry of the *same* request already committed | `ROLLBACK TO SAVEPOINT`, return the existing row as success (§6.3) | idempotent replay |
 | `55P03` | lock_timeout — waited too long on an uncommitted conflicting row (hot slot) | `ROLLBACK TO SAVEPOINT`, try next candidate | don't let one hot slot pin the request |
 | `40P01` | deadlock_detected | **deliberately** abort and re-run `attempt_booking()` as a **fresh transaction** (bounded budget ≈3) | savepoint-recoverable too, but a deadlock signals a lock-ordering clash — continuing the loop under the already-held locks would likely deadlock again, so a clean transaction that re-reads candidates is the more robust recovery |
 
 The key nuance: `40P01` is **not** structurally different from `23P01` (both are savepoint-recoverable) — restarting the whole transaction on deadlock is a **deliberate robustness choice**, not a necessity. Deterministic candidate ordering (below) makes `40P01` rare in the first place. No partial state is ever committed; every terminal outcome is either a single confirmed appointment or a clean `409`.
+
+> **Correction found during implementation — `23505` does not always fire for a same-key retry.**
+> The `23505` row above (and §6.3's "whichever request reaches INSERT second hits `23505`")
+> quietly assumes the unique-violation is the error PostgreSQL reports. It is not, in the exact
+> case that matters most: when two retries of the *same* request race for the *same* slot, the
+> second INSERT violates **both** the exclusion constraint **and** the idempotency unique index,
+> and PostgreSQL reports whichever index has the **lower OID** — i.e. the one created first,
+> which is `no_technician_overlap`. Measured, not assumed: the second insert raises `23P01`,
+> constraint `no_technician_overlap`.
+>
+> Left uncorrected, the loop reads that as a lost race, exhausts its candidates, and answers
+> `409 NO_AVAILABILITY` to a client that was merely retrying its own booking — breaking the
+> idempotency promise precisely when the network made the retry necessary.
+>
+> **Fix (implemented):** when the candidate loop is exhausted, re-read
+> `(dealership_id, idempotency_key)` before returning `409`; if a row now exists, return it as an
+> idempotent replay. `READ COMMITTED` takes a fresh snapshot per statement, so the twin's
+> committed row is visible even though this transaction started earlier. The guarantee no longer
+> depends on which constraint happens to fire first. Covered by
+> `test/e2e/idempotency.e2e-spec.ts` ("collapses a burst of CONCURRENT retries").
 
 > **ORM note (implementation reality).** Prisma does not expose interactive `SAVEPOINT` control declaratively, so this loop runs inside a **manually held connection/transaction using `$executeRawUnsafe('SAVEPOINT ...')`** rather than `prisma.$transaction`'s sugar. The default interactive-transaction timeout (Prisma's is ~5 s) must be raised to comfortably exceed the sum of `lock_timeout` (2 s) and the candidate-loop work — e.g. **~10 s** — so a legitimate lock-wait isn't killed by the ORM. This is the one core path that lives outside the ORM's ergonomic surface — it is prototyped against Testcontainers before being relied on (§12).
 
@@ -498,7 +518,9 @@ The key nuance: `40P01` is **not** structurally different from `23P01` (both are
 
 An `Idempotency-Key` header ensures a client retry — e.g., after a network timeout — does not create a second appointment. The guarantee has **two tiers, with honest scope**:
 
-- **Durable, for the created (`201`) path — the partial-unique index on `(dealership_id, idempotency_key)`.** Even if Redis is cold, evicted, or bypassed, the DB refuses a second confirmed row for the same key **within a dealership**. The concurrent-retry race on the Redis check-then-act is therefore **benign**: whichever request reaches INSERT second hits `23505` and returns the existing appointment (§6.2). This is the real safety net — a duplicate confirmed booking is *impossible*.
+- **Durable, for the created (`201`) path — the partial-unique index on `(dealership_id, idempotency_key)`.** Even if Redis is cold, evicted, or bypassed, the DB refuses a second confirmed row for the same key **within a dealership**. The concurrent-retry race on the Redis check-then-act is therefore **benign**: whichever request reaches INSERT second is rejected by the database and replays the existing appointment rather than creating a duplicate (§6.2). This is the real safety net — a duplicate confirmed booking is *impossible*. *(The rejection is not always `23505`: when both retries target the same slot the exclusion constraint fires first — see the correction note in §6.2. The replay is therefore driven by an explicit key re-check, not by the SQLSTATE alone.)*
+
+- **A retry is also matched *before* allocation runs.** The durable lookup on `(dealership_id, idempotency_key)` happens at the top of the booking flow (§5.1), not only as an error path. This is load-bearing for the ordinary sequential retry: once the original appointment occupies the slot, `findCandidates` returns nothing, the allocation loop never reaches an INSERT, and no unique violation can occur — so a client retrying after a network timeout would otherwise be told `409 NO_AVAILABILITY` for colliding with its own booking.
 - **Best-effort, for fast replay — Redis (fast path)** keyed by `(dealership_id, Idempotency-Key)`, holding a **request fingerprint** (hash of the normalized body) and the serialized prior response. It lets rapid retries replay instantly. TTLs are explicit: a cached **`201`** entry lives ~**24 h** (long enough to absorb client retries; the DB row is the durable record anyway), while a cached **`409`** lives only ~**60 s** and is **not durable** — once it expires a retry re-runs allocation, which is the **correct** behaviour because availability is time-sensitive and the slot may have freed. Replaying a stale `409` forever would be wrong.
 
 **The key is scoped to the tenant.** The uniqueness and the cache key are both `(dealership_id, idempotency_key)`, never the bare key — so two dealerships that happen to choose the same key value can **never** collide or read each other's appointment. On the durable `23505` replay path, the service re-checks that the stored row's `dealership_id` matches the caller **and** that its persisted **`request_hash` column** (§ `database-design.md` §2.7) matches the incoming fingerprint before returning the row — so same-key/different-body reuse is caught as `422` **even when Redis is cold** (the fingerprint lives on the row, not only in the cache).

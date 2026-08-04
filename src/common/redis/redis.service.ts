@@ -48,12 +48,26 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Shutdown must be decisive even when Redis is unreachable.
+   *
+   * `quit()` sends a QUIT command and waits for the reply — on a client stuck in a reconnect
+   * loop against a dead server there is nobody to reply, so it can hang indefinitely and stall
+   * the whole graceful shutdown. So: only attempt a polite quit when the connection is actually
+   * ready, bound it with a timeout regardless, and fall back to a hard `disconnect()`.
+   */
   async onModuleDestroy(): Promise<void> {
-    try {
-      await this.client.quit();
-    } catch {
-      this.client.disconnect();
+    if (this.client.status === 'ready') {
+      try {
+        await Promise.race([
+          this.client.quit(),
+          new Promise((resolve) => setTimeout(resolve, 2000).unref()),
+        ]);
+      } catch {
+        // fall through to the hard disconnect
+      }
     }
+    this.client.disconnect();
   }
 
   isHealthy(): boolean {

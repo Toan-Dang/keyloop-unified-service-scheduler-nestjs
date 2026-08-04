@@ -188,15 +188,19 @@ export function localToUtc(
   const hour = Math.floor(minutesOfDay / 60);
   const minute = minutesOfDay % 60;
 
-  // Treat the wall-clock as if it were UTC, then correct by the zone's offset at that instant.
-  // Two passes converge because the offset changes by at most a couple of hours.
+  // Treat the wall-clock as if it were UTC, then correct by the zone's offset.
+  //
+  // Probing with the offsets in force a day either side is what makes both DST cases fall out:
+  // around a transition the two probes disagree, yielding the two distinct instants that a
+  // fall-back overlap really has. Probing only once — or twice with the same seed — would find
+  // just one of them and silently return the wrong side of the overlap.
   const naive = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  const candidates: Date[] = [];
+  const DAY_MS = 86_400_000;
 
-  for (const pass of [0, 1]) {
-    const guess = new Date(naive - offsetAt(new Date(naive - pass * 0), timeZone) * 60_000);
-    const corrected = new Date(naive - offsetAt(guess, timeZone) * 60_000);
-    if (!candidates.some((c) => c.getTime() === corrected.getTime())) candidates.push(corrected);
+  const candidates: Date[] = [];
+  for (const probe of [naive - DAY_MS, naive + DAY_MS]) {
+    const instant = new Date(naive - offsetAt(new Date(probe), timeZone) * 60_000);
+    if (!candidates.some((c) => c.getTime() === instant.getTime())) candidates.push(instant);
   }
 
   // Keep only instants that really do render back to the requested wall-clock — this is what

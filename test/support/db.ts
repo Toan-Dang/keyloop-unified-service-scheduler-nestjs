@@ -1,3 +1,4 @@
+import Redis from 'ioredis';
 import { Pool, type PoolClient } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../../generated/prisma/client';
@@ -27,9 +28,39 @@ export function createPrisma(): PrismaClient {
   });
 }
 
-/** Truncates the transactional tables, leaving the seeded reference data in place. */
+/**
+ * Truncates the transactional tables, leaving the seeded reference data in place — and clears
+ * the idempotency cache with them.
+ *
+ * Flushing Redis is not optional here. Truncating appointments behind a warm cache leaves the
+ * two stores in a state no real system can reach: a cached 201 pointing at a row that no longer
+ * exists. A later test reusing that key would replay the phantom and pass for the wrong reason.
+ */
 export async function resetAppointments(pool: Pool): Promise<void> {
   await pool.query('TRUNCATE TABLE appointments, outbox RESTART IDENTITY CASCADE');
+  await flushIdempotencyCache();
+}
+
+let redis: Redis | undefined;
+
+export async function flushIdempotencyCache(): Promise<void> {
+  try {
+    redis ??= new Redis(readTestEnv().redisUrl, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+    });
+    if (redis.status === 'wait' || redis.status === 'end') await redis.connect();
+    await redis.flushdb();
+  } catch {
+    // Redis is optional infrastructure; a suite that cannot reach it is testing the degraded
+    // path anyway.
+  }
+}
+
+export async function closeRedis(): Promise<void> {
+  await redis?.quit().catch(() => undefined);
+  redis = undefined;
 }
 
 export async function truncateAll(pool: Pool): Promise<void> {

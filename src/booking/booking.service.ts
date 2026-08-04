@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { AvailabilityService } from '../availability/availability.service';
 import { AppException } from '../common/errors/app.exception';
 import { getCorrelationId } from '../common/correlation/correlation';
 import { PrismaService } from '../prisma/prisma.service';
@@ -22,7 +23,13 @@ interface ServiceTypeRow {
   requiredSkills: string[];
 }
 
-const APPOINTMENT_COLUMNS = `
+interface CustomerVehicleRow {
+  customerId: string | null;
+  vehicleId: string | null;
+  vehicleOwnerId: string | null;
+}
+
+export const APPOINTMENT_COLUMNS = `
   id,
   dealership_id   AS "dealershipId",
   customer_id     AS "customerId",
@@ -43,12 +50,14 @@ export class BookingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly allocation: AllocationService,
+    private readonly availability: AvailabilityService,
   ) {}
 
   async createAppointment(
     principal: Principal,
     dto: CreateAppointmentDto,
     idempotency: { key: string; requestHash: string },
+    now: Date = new Date(),
   ): Promise<BookingOutcome> {
     // ---------------------------------------------------------------------------------------
     // Durable idempotency check, BEFORE allocation (§5.1, §6.3).
@@ -70,12 +79,55 @@ export class BookingService {
       return { appointment: this.assertSameRequest(existing, idempotency), replayed: true };
     }
 
-    // Duration is server-authoritative and tenant-scoped: a service type belonging to another
-    // dealership simply does not exist from this caller's view (§7, §14).
-    const serviceType = await this.loadServiceType(principal.dealershipId, dto.serviceTypeId);
-
+    // ---------------------------------------------------------------------------------------
+    // Deterministic pre-checks (§5.1, §7.1), in the documented order.
+    //
+    // "Deterministic" is the operative word: each depends only on the request and on reference
+    // data, never on live resource availability. That is what makes them safe to answer before
+    // the transaction and what separates a 4xx the client can fix from a 409 it cannot.
+    // ---------------------------------------------------------------------------------------
     const start = new Date(dto.desiredStartTime);
+    if (Number.isNaN(start.getTime())) {
+      throw AppException.validation('desiredStartTime is not a valid instant', {
+        field: 'desiredStartTime',
+      });
+    }
+    if (start.getTime() < now.getTime()) {
+      throw AppException.validation('desiredStartTime is in the past', {
+        field: 'desiredStartTime',
+        desiredStartTime: dto.desiredStartTime,
+      });
+    }
+
+    // Tenant-scoped, so a service type belonging to another dealership simply does not exist
+    // from this caller's view — 404, not 403; no existence leak (§7, §14).
+    const serviceType = await this.loadServiceType(principal.dealershipId, dto.serviceTypeId);
     const end = new Date(start.getTime() + serviceType.durationMinutes * 60_000);
+
+    await this.assertCustomerAndVehicle(principal.dealershipId, dto);
+
+    // A configuration miss ("nobody here holds `brakes`") is NOT the same failure as "the one
+    // who does is busy". The first is 422 and permanent until someone changes the roster; the
+    // second is 409 and might succeed on retry (§7.1).
+    if (
+      !(await this.availability.hasQualifiedTechnician(
+        principal.dealershipId,
+        serviceType.requiredSkills,
+      ))
+    ) {
+      throw AppException.noQualifiedTechnician(serviceType.id, serviceType.requiredSkills);
+    }
+
+    // Dealership OPENING hours only — a property of the request alone, so it is a pre-check.
+    // A window inside opening hours but outside every technician's individual *working* hours is
+    // deliberately NOT this error: that is a per-technician availability fact and comes back as
+    // 409 NO_AVAILABILITY from the loop (§7.1).
+    if (!(await this.availability.withinOpeningHours(principal.dealershipId, start, end))) {
+      throw AppException.outsideWorkingHours({
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+      });
+    }
 
     const command: AllocationCommand = {
       dealershipId: principal.dealershipId,
@@ -111,7 +163,7 @@ export class BookingService {
     const result = await this.allocation.allocate(command);
 
     if (result.outcome === 'no-availability') {
-      // A genuine state conflict — qualified technicians may well exist, but every
+      // A genuine state conflict — qualified technicians exist (we just checked), but every
       // (technician, bay) pair for this window is taken. 409, not 422 (§7.1).
       throw AppException.noAvailability({
         candidatesTried: result.candidatesTried,
@@ -175,5 +227,34 @@ export class BookingService {
     const serviceType = rows[0];
     if (!serviceType) throw AppException.notFound('ServiceType', serviceTypeId);
     return serviceType;
+  }
+
+  /**
+   * Resolves both references in one round trip and distinguishes the two failures that look
+   * alike: "does not exist in this tenant" (404) versus "exists here but belongs to a different
+   * customer" (422 VEHICLE_OWNERSHIP_MISMATCH).
+   */
+  private async assertCustomerAndVehicle(
+    dealershipId: string,
+    dto: CreateAppointmentDto,
+  ): Promise<void> {
+    const rows = await this.prisma.$queryRawUnsafe<CustomerVehicleRow[]>(
+      `SELECT c.id AS "customerId",
+              v.id AS "vehicleId",
+              v.customer_id AS "vehicleOwnerId"
+         FROM (SELECT 1) AS anchor
+         LEFT JOIN customers c ON c.id = $2::uuid AND c.dealership_id = $1::uuid
+         LEFT JOIN vehicles  v ON v.id = $3::uuid AND v.dealership_id = $1::uuid`,
+      dealershipId,
+      dto.customerId,
+      dto.vehicleId,
+    );
+
+    const row = rows[0];
+    if (!row?.customerId) throw AppException.notFound('Customer', dto.customerId);
+    if (!row.vehicleId) throw AppException.notFound('Vehicle', dto.vehicleId);
+    if (row.vehicleOwnerId !== dto.customerId) {
+      throw AppException.vehicleOwnershipMismatch(dto.vehicleId, dto.customerId);
+    }
   }
 }

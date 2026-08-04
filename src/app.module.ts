@@ -4,6 +4,8 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 import { LoggerModule } from 'nestjs-pino';
+import { AvailabilityModule } from './availability/availability.module';
+import { BookingModule } from './booking/booking.module';
 import { CommonModule } from './common/common.module';
 import { resolveCorrelationId } from './common/correlation/correlation';
 import { CorrelationModule } from './common/correlation/correlation.module';
@@ -62,6 +64,8 @@ import { PrismaModule } from './prisma/prisma.module';
     ScheduleModule.forRoot(),
     PrismaModule,
     CommonModule,
+    AvailabilityModule,
+    BookingModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

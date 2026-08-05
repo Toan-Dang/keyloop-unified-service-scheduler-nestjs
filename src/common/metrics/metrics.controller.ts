@@ -1,4 +1,5 @@
 import { Controller, Get, Header, Res } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { ApiExcludeController } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Public } from '../auth/public.decorator';
@@ -6,6 +7,7 @@ import { MetricsService } from './metrics.service';
 
 @ApiExcludeController()
 @Controller('metrics')
+@SkipThrottle()
 export class MetricsController {
   constructor(private readonly metrics: MetricsService) {}
 

@@ -8,8 +8,10 @@ import { BookingService } from './booking.service';
 
 @Module({
   imports: [AvailabilityModule],
-  // BookingController is listed first so POST /appointments is matched before the
-  // AppointmentsController routes; Nest resolves in declaration order.
+  // BookingController owns POST /appointments; AppointmentsController owns GET /appointments,
+  // GET /appointments/:id and POST /appointments/:id/cancel. No method+path pair overlaps
+  // between them, so — unlike a case where two controllers register the same route — this
+  // array's order is not load-bearing for routing today.
   controllers: [BookingController, AppointmentsController],
   providers: [AllocationService, BookingService, AppointmentsService],
   exports: [BookingService, AllocationService, AppointmentsService],

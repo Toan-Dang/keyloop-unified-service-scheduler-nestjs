@@ -1,8 +1,9 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { AvailabilityModule } from './availability/availability.module';
 import { BookingModule } from './booking/booking.module';
@@ -12,6 +13,7 @@ import { CorrelationModule } from './common/correlation/correlation.module';
 import { TenantGuard } from './common/auth/tenant.guard';
 import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
 import { HttpMetricsInterceptor } from './common/metrics/http-metrics.interceptor';
+import type { AppConfig } from './config/configuration';
 import { loadConfiguration } from './config/configuration';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -64,6 +66,19 @@ import { ResourcesModule } from './resources/resources.module';
     }),
     EventEmitterModule.forRoot({ global: true }),
     ScheduleModule.forRoot(),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const rateLimit = config.getOrThrow<AppConfig['rateLimit']>('rateLimit');
+        return {
+          throttlers: [{ name: 'default', ttl: rateLimit.windowMs, limit: rateLimit.max }],
+          // A single switch disables every throttle, named or per-route (@Throttle overrides
+          // the limit/ttl for a route but not this name, so the module-level skipIf still
+          // gates it). Off under NODE_ENV=test by default — see AppConfig.rateLimit.
+          skipIf: () => !rateLimit.enabled,
+        };
+      },
+    }),
     PrismaModule,
     CommonModule,
     AvailabilityModule,
@@ -74,6 +89,7 @@ import { ResourcesModule } from './resources/resources.module';
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_GUARD, useClass: TenantGuard },
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: HttpMetricsInterceptor },
   ],
 })

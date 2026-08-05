@@ -1,4 +1,5 @@
 import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import {
   ApiOkResponse,
   ApiOperation,
@@ -19,6 +20,7 @@ interface ReadinessBody {
 
 @ApiTags('operations')
 @Controller()
+@SkipThrottle()
 export class HealthController {
   constructor(
     private readonly prisma: PrismaService,

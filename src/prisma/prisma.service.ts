@@ -26,7 +26,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     const database = config.getOrThrow<AppConfig['database']>('database');
     const pool = new Pool({
       connectionString: database.url,
-      max: Number.parseInt(process.env.DATABASE_POOL_SIZE ?? '20', 10),
+      max: database.poolSize,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
       // Every window comparison happens server-side, so the app's own clock never decides

@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
   ApiNotFoundResponse,
@@ -6,6 +7,7 @@ import {
   ApiOperation,
   ApiParam,
   ApiTags,
+  ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
 import { CurrentPrincipal } from '../common/auth/current-principal.decorator';
 import type { Principal } from '../common/auth/principal';
@@ -14,6 +16,7 @@ import { AppointmentPageResponse, AppointmentResponse } from './dto/appointment.
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { ListAppointmentsQueryDto } from './dto/list-appointments.dto';
 import { UuidParamDto } from '../common/dto/uuid-param.dto';
+import { APPOINTMENT_WRITE_THROTTLE } from './write-throttle';
 
 @ApiTags('appointments')
 @ApiBearerAuth('bearer')
@@ -57,6 +60,7 @@ export class AppointmentsController {
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
+  @Throttle(APPOINTMENT_WRITE_THROTTLE)
   @ApiOperation({
     summary: 'Cancel an appointment, freeing its slot',
     description:
@@ -67,6 +71,7 @@ export class AppointmentsController {
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: AppointmentResponse, description: 'Cancelled (or already was).' })
   @ApiNotFoundResponse({ description: 'NOT_FOUND — no such appointment in this dealership.' })
+  @ApiTooManyRequestsResponse({ description: 'RATE_LIMITED — includes a Retry-After header.' })
   async cancel(
     @CurrentPrincipal() principal: Principal,
     @Param() params: UuidParamDto,

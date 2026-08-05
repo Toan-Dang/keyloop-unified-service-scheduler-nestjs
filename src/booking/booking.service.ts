@@ -4,6 +4,7 @@ import { AppException } from '../common/errors/app.exception';
 import { getCorrelationId } from '../common/correlation/correlation';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Principal } from '../common/auth/principal';
+import { findAppointmentByIdempotencyKey } from './appointment-columns';
 import {
   AllocationService,
   type AllocationCommand,
@@ -28,22 +29,6 @@ interface CustomerVehicleRow {
   vehicleId: string | null;
   vehicleOwnerId: string | null;
 }
-
-export const APPOINTMENT_COLUMNS = `
-  id,
-  dealership_id   AS "dealershipId",
-  customer_id     AS "customerId",
-  vehicle_id      AS "vehicleId",
-  service_type_id AS "serviceTypeId",
-  technician_id   AS "technicianId",
-  service_bay_id  AS "serviceBayId",
-  start_time      AS "startTime",
-  end_time        AS "endTime",
-  status,
-  idempotency_key AS "idempotencyKey",
-  request_hash    AS "requestHash",
-  created_at      AS "createdAt"
-`;
 
 @Injectable()
 export class BookingService {
@@ -74,7 +59,11 @@ export class BookingService {
     // It is a database read, not a cache read, so the guarantee holds with Redis cold — which is
     // the whole point of persisting `request_hash` on the row (db §5.4).
     // ---------------------------------------------------------------------------------------
-    const existing = await this.findByIdempotencyKey(principal.dealershipId, idempotency.key);
+    const existing = await findAppointmentByIdempotencyKey(
+      this.prisma,
+      principal.dealershipId,
+      idempotency.key,
+    );
     if (existing) {
       return { appointment: this.assertSameRequest(existing, idempotency), replayed: true };
     }
@@ -195,21 +184,6 @@ export class BookingService {
       throw AppException.idempotencyKeyReuse(idempotency.key);
     }
     return appointment;
-  }
-
-  /** Scoped to the tenant as well as the key, so a replay can never cross dealerships (§6.3). */
-  private async findByIdempotencyKey(
-    dealershipId: string,
-    idempotencyKey: string,
-  ): Promise<AllocatedAppointment | null> {
-    const rows = await this.prisma.$queryRawUnsafe<AllocatedAppointment[]>(
-      `SELECT ${APPOINTMENT_COLUMNS}
-         FROM appointments
-        WHERE dealership_id = $1::uuid AND idempotency_key = $2`,
-      dealershipId,
-      idempotencyKey,
-    );
-    return rows[0] ?? null;
   }
 
   private async loadServiceType(

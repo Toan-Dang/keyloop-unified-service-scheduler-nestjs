@@ -1,4 +1,5 @@
 import { Body, Controller, Headers, HttpCode, HttpStatus, Post, Res } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -8,6 +9,7 @@ import {
   ApiNotFoundResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -20,6 +22,7 @@ import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { BookingService } from './booking.service';
 import { AppointmentResponse } from './dto/appointment.response';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
+import { APPOINTMENT_WRITE_THROTTLE } from './write-throttle';
 
 export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
 
@@ -34,6 +37,7 @@ export class BookingController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @Throttle(APPOINTMENT_WRITE_THROTTLE)
   @ApiOperation({
     summary: 'Book a service appointment',
     description:
@@ -64,6 +68,7 @@ export class BookingController {
     description:
       'VEHICLE_OWNERSHIP_MISMATCH, NO_QUALIFIED_TECHNICIAN, OUTSIDE_WORKING_HOURS or IDEMPOTENCY_KEY_REUSE.',
   })
+  @ApiTooManyRequestsResponse({ description: 'RATE_LIMITED — includes a Retry-After header.' })
   async create(
     @CurrentPrincipal() principal: Principal,
     @Body() dto: CreateAppointmentDto,

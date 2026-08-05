@@ -199,11 +199,11 @@ npm run test:e2e         # the HTTP surface via Supertest
 
 | Suite | Tests | What it proves |
 |---|---:|---|
-| unit | 35 | Hours arithmetic, half-open boundaries, lunch-gap straddling, DST enumeration, the error catalog, tenant resolution |
-| integration | 47 | The exclusion constraints themselves, the allocation loop's SQLSTATE branches, the outbox relay protocol, the reminder scan |
+| unit | 44 | Hours arithmetic, half-open boundaries, lunch-gap straddling, DST enumeration, the error catalog, tenant resolution, the `AUTH_ENABLED=false` dev-bypass, the `pg-error.ts` message-regex fallback |
+| integration | 49 | The exclusion constraints themselves, the allocation loop's SQLSTATE branches decoded from a REAL Prisma error (`pg-error.spec.ts`), the outbox relay protocol, the reminder scan |
 | concurrency | 8 | **Exactly one `201`** under N parallel bookings — the core claim |
-| e2e | 75 | Every error code, idempotency incl. Redis-down, pagination, RBAC, cancel, availability, OpenAPI conformance |
-| **Total** | **165** | |
+| e2e | 79 | Every error code (incl. the `desiredStartTime` UTC-offset requirement), idempotency incl. Redis-down, pagination, RBAC, cancel, availability, rate limiting, OpenAPI conformance |
+| **Total** | **180** | |
 
 Everything except `unit` needs **real PostgreSQL** — a `btree_gist` EXCLUDE constraint cannot be
 mocked or emulated, and it is the thing under test. Testcontainers starts `postgres:18-alpine`
@@ -316,11 +316,15 @@ committed. The values the design pins are surfaced explicitly rather than buried
 | `BOOKING_LOCK_TIMEOUT_MS` | `2000` | Caps the wait on an uncommitted conflicting row |
 | `BOOKING_TX_TIMEOUT_MS` | `10000` | Must exceed `lock_timeout` + loop work; Prisma's ~5s default would kill a legitimate wait |
 | `BOOKING_DEADLOCK_RETRIES` | `3` | Bounded whole-transaction restarts on `40P01` |
+| `DATABASE_POOL_SIZE` | `20` | `pg.Pool` max size; `instances × poolSize` must stay under Postgres's `max_connections` (§10) |
 | `IDEMPOTENCY_TTL_CREATED_SECONDS` | `86400` | Cached `201` replay window |
 | `IDEMPOTENCY_TTL_CONFLICT_SECONDS` | `60` | Cached `409` — deliberately short; availability is time-sensitive |
 | `OUTBOX_LEASE_SECONDS` | `30` | Must exceed worst-case single-batch publish time |
 | `OUTBOX_MAX_ATTEMPTS` | `8` | Then `FAILED` — the DB equivalent of a dead-letter queue |
 | `REMINDER_BAND_HOURS` | `1` | The scan band width; the cron interval must be smaller |
+| `RATE_LIMIT_MAX` | `120` | Requests per client IP per `RATE_LIMIT_WINDOW_MS` (default 60s). `POST /appointments` and `POST /appointments/{id}/cancel` carry their own tighter, fixed limit (20/10s) — they run real transactional writes, not reads |
+| `RATE_LIMIT_ENABLED` | `true` in dev/prod, `false` under `NODE_ENV=test` | Off by default in tests so the concurrency suite's parallel bursts aren't throttled |
+| `AUTH_DEV_DEALERSHIP_ID` | *(none)* | Required only when `AUTH_ENABLED=false`: every request is then a fixed STAFF principal for this dealership instead of every handler 403ing with no principal set |
 
 ---
 

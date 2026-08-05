@@ -6,6 +6,8 @@ import { MetricsService } from '../common/metrics/metrics.service';
 import type { AppConfig } from '../config/configuration';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Sql } from '../prisma/tx';
+import { APPOINTMENT_COLUMNS, findAppointmentByIdempotencyKey } from './appointment-columns';
+import type { AppointmentRow } from './dto/appointment.response';
 import { CONSTRAINT, constraintOf, isSqlState, SQLSTATE, sqlStateOf } from './pg-error';
 
 export interface AllocationCommand {
@@ -28,21 +30,13 @@ export interface OutboxEventDraft {
   payload: Record<string, unknown>;
 }
 
-export interface AllocatedAppointment {
-  id: string;
-  dealershipId: string;
-  customerId: string;
-  vehicleId: string;
-  serviceTypeId: string;
-  technicianId: string;
-  serviceBayId: string;
-  startTime: Date;
-  endTime: Date;
-  status: 'CONFIRMED' | 'CANCELLED';
-  idempotencyKey: string | null;
-  requestHash: string | null;
-  createdAt: Date;
-}
+/**
+ * The allocation loop never cancels anything, so `cancelledAt`/`cancelReason` are always null on
+ * a row it returns — but the shape is `AppointmentRow` itself (§6.2/§6.3 both need
+ * `idempotencyKey`/`requestHash`, which is exactly the rest of that type), not a separate
+ * near-duplicate. One appointment row shape for the whole booking module.
+ */
+export type AllocatedAppointment = AppointmentRow;
 
 export type AllocationResult =
   | { outcome: 'created'; appointment: AllocatedAppointment; candidatesTried: number }
@@ -102,7 +96,12 @@ export class AllocationService {
 
     let lastDeadlock: unknown;
 
-    for (let attempt = 0; attempt <= this.booking.deadlockRetries; attempt += 1) {
+    // deadlockRetries + 1 total attempts: one initial try, plus up to `deadlockRetries` restarts
+    // on 40P01 (§6.2's "bounded retry ≈3"). `maxAttempts` names that sum explicitly rather than
+    // leaving `attempt <= this.booking.deadlockRetries` to be misread as `deadlockRetries` total
+    // tries; the loop is 1-indexed so the logged `attempt` needs no `+ 1` to be human-readable.
+    const maxAttempts = this.booking.deadlockRetries + 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.attemptBooking(command);
 
@@ -129,7 +128,8 @@ export class AllocationService {
         this.logger.warn(
           {
             correlationId: getCorrelationId(),
-            attempt: attempt + 1,
+            attempt,
+            maxAttempts,
             sqlState: SQLSTATE.DEADLOCK_DETECTED,
           },
           'Deadlock detected — restarting the whole booking transaction',
@@ -306,19 +306,7 @@ export class AllocationService {
          technician_id, service_bay_id, start_time, end_time, idempotency_key, request_hash)
       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
               $7::timestamptz, $8::timestamptz, $9, $10)
-      RETURNING id,
-                dealership_id   AS "dealershipId",
-                customer_id     AS "customerId",
-                vehicle_id      AS "vehicleId",
-                service_type_id AS "serviceTypeId",
-                technician_id   AS "technicianId",
-                service_bay_id  AS "serviceBayId",
-                start_time      AS "startTime",
-                end_time        AS "endTime",
-                status,
-                idempotency_key AS "idempotencyKey",
-                request_hash    AS "requestHash",
-                created_at      AS "createdAt"
+      RETURNING ${APPOINTMENT_COLUMNS}
       `,
       command.dealershipId,
       command.customerId,
@@ -363,35 +351,17 @@ export class AllocationService {
   }
 
   /**
-   * Looks up the row the 23505 collided with. Scoped to the caller's dealership as well as the
-   * key — the uniqueness is `(dealership_id, idempotency_key)`, and re-checking the tenant here
-   * means a replay can never hand back another dealership's appointment (§6.3).
+   * The row the 23505 (or post-exhaustion) check collided with, or null if this command was never
+   * given a key. The query itself lives in `appointment-columns.ts`, shared with
+   * `BookingService`'s pre-allocation check; this wrapper only adds the null-guard, since
+   * `AllocationCommand.idempotencyKey` is nullable (an idempotency key is required by the API,
+   * §6.3, but the type itself does not encode that).
    */
   private async findByIdempotencyKey(
     tx: Sql,
     command: AllocationCommand,
   ): Promise<AllocatedAppointment | null> {
     if (!command.idempotencyKey) return null;
-
-    const rows = await tx.$queryRawUnsafe<AllocatedAppointment[]>(
-      `SELECT id,
-              dealership_id   AS "dealershipId",
-              customer_id     AS "customerId",
-              vehicle_id      AS "vehicleId",
-              service_type_id AS "serviceTypeId",
-              technician_id   AS "technicianId",
-              service_bay_id  AS "serviceBayId",
-              start_time      AS "startTime",
-              end_time        AS "endTime",
-              status,
-              idempotency_key AS "idempotencyKey",
-              request_hash    AS "requestHash",
-              created_at      AS "createdAt"
-         FROM appointments
-        WHERE dealership_id = $1::uuid AND idempotency_key = $2`,
-      command.dealershipId,
-      command.idempotencyKey,
-    );
-    return rows[0] ?? null;
+    return findAppointmentByIdempotencyKey(tx, command.dealershipId, command.idempotencyKey);
   }
 }

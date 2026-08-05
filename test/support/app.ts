@@ -14,7 +14,12 @@ import { readTestEnv } from './test-database';
  * the same wiring a reviewer gets from `npm run start:dev`.
  */
 export async function createTestApp(
-  overrides: { outboxRelay?: boolean; reminderCron?: boolean; redisUrl?: string } = {},
+  overrides: {
+    outboxRelay?: boolean;
+    reminderCron?: boolean;
+    redisUrl?: string;
+    rateLimitEnabled?: boolean;
+  } = {},
 ): Promise<INestApplication> {
   const env = readTestEnv();
   process.env.DATABASE_URL = env.databaseUrl;
@@ -26,6 +31,14 @@ export async function createTestApp(
   // concurrency measurement.
   process.env.OUTBOX_RELAY_ENABLED = String(overrides.outboxRelay ?? false);
   process.env.REMINDER_CRON_ENABLED = String(overrides.reminderCron ?? false);
+  // Off by default under NODE_ENV=test (see loadConfiguration) so the concurrency suite's
+  // parallel bursts and the idempotency suite's sequential-retry loops are never throttled.
+  // A suite can opt back in to exercise the throttling behaviour itself.
+  if (overrides.rateLimitEnabled !== undefined) {
+    process.env.RATE_LIMIT_ENABLED = String(overrides.rateLimitEnabled);
+  } else {
+    delete process.env.RATE_LIMIT_ENABLED;
+  }
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
 

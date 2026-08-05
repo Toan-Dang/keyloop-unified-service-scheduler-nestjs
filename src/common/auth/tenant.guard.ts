@@ -15,6 +15,11 @@ import type { AppConfig } from '../../config/configuration';
  * Token format for local runs / tests:
  *   Authorization: Bearer <base64url of {"dealershipId":"...","role":"STAFF"|"CUSTOMER","customerId":"..."}>
  *
+ * `AUTH_ENABLED=false` is a separate, purely local convenience: every request is then treated as
+ * a fixed STAFF principal for `AUTH_DEV_DEALERSHIP_ID`, with no header required at all. It does
+ * not weaken tenant isolation — there is still exactly one principal, still resolved before any
+ * handler runs, still the only source of `dealershipId` — it just skips *presenting* one.
+ *
  * Replacing this with JWT verification changes this file only; no caller learns the difference.
  */
 @Injectable()
@@ -31,11 +36,12 @@ export class TenantGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const auth = this.config.get<AppConfig['auth']>('auth');
-    if (auth && !auth.enabled) return true;
-
+    const auth = this.config.getOrThrow<AppConfig['auth']>('auth');
     const request = context.switchToHttp().getRequest<Request>();
-    const principal = parseBearerToken(request.headers.authorization);
+
+    const principal = auth.enabled
+      ? parseBearerToken(request.headers.authorization)
+      : devPrincipal(auth.devDealershipId);
 
     (request as Request & { principal?: Principal })[PRINCIPAL_REQUEST_KEY] = principal;
     return true;
@@ -86,4 +92,9 @@ export function parseBearerToken(header: string | undefined): Principal {
 /** Test/demo helper — mints the stub token the guard above accepts. */
 export function encodePrincipal(principal: Omit<Principal, 'subject'>): string {
   return Buffer.from(JSON.stringify(principal), 'utf8').toString('base64url');
+}
+
+/** The fixed principal every request resolves to when `AUTH_ENABLED=false`. */
+function devPrincipal(dealershipId: string): Principal {
+  return { dealershipId, role: PrincipalRole.STAFF, subject: 'dev-bypass' };
 }

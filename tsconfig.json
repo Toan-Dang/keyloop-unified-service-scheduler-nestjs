@@ -20,6 +20,10 @@
 
     "strict": true,
     "strictNullChecks": true,
+    // Deliberately off, not an oversight: Nest DTOs/entities declare fields typed by
+    // `class-validator`/Prisma without a constructor (validated or hydrated after construction),
+    // and constructor-injected providers declare `private readonly x: Y` params as the only
+    // initialization site TS can't see through this flag. Every other strict check stays on.
     "strictPropertyInitialization": false,
     "noImplicitAny": true,
     "strictBindCallApply": true,

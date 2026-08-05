@@ -10,6 +10,8 @@ export interface AppConfig {
   readonly logLevel: string;
   readonly database: {
     readonly url: string;
+    /** `pg.Pool` max size (§10: `instances × poolSize` must stay under `max_connections`). */
+    readonly poolSize: number;
   };
   readonly redis: {
     readonly url: string;
@@ -42,6 +44,23 @@ export interface AppConfig {
   };
   readonly auth: {
     readonly enabled: boolean;
+    /**
+     * Dev/local convenience only: the dealership every request is treated as when `enabled` is
+     * false, so protected routes still have a tenant to scope on instead of every
+     * `@CurrentPrincipal()` handler throwing 403 with no principal ever set (§14). Empty when
+     * `enabled` is true — nothing reads it in that case. Guaranteed non-empty when `enabled` is
+     * false; `loadConfiguration` throws at boot otherwise rather than failing per-request.
+     */
+    readonly devDealershipId: string;
+  };
+  readonly rateLimit: {
+    /** Off by default under NODE_ENV=test so the concurrency suite's parallel bursts and the
+     *  e2e suite's sequential-retry loops are never throttled without every test file having to
+     *  know that. Explicit RATE_LIMIT_ENABLED still wins, so a suite can opt back in. */
+    readonly enabled: boolean;
+    /** API-wide default window, applied per client IP. */
+    readonly windowMs: number;
+    readonly max: number;
   };
 }
 
@@ -59,6 +78,17 @@ function bool(value: string | undefined, fallback: boolean): boolean {
   return value.toLowerCase() === 'true' || value === '1';
 }
 
+function authConfig(): AppConfig['auth'] {
+  const enabled = bool(process.env.AUTH_ENABLED, true);
+  const devDealershipId = process.env.AUTH_DEV_DEALERSHIP_ID ?? '';
+  if (!enabled && devDealershipId === '') {
+    throw new Error(
+      'AUTH_DEV_DEALERSHIP_ID is required when AUTH_ENABLED=false (see .env.example)',
+    );
+  }
+  return { enabled, devDealershipId };
+}
+
 export function loadConfiguration(): AppConfig {
   const nodeEnv = (process.env.NODE_ENV ?? 'development') as AppConfig['nodeEnv'];
 
@@ -71,7 +101,7 @@ export function loadConfiguration(): AppConfig {
     nodeEnv,
     port: int(process.env.PORT, 3000),
     logLevel: process.env.LOG_LEVEL ?? (nodeEnv === 'production' ? 'info' : 'debug'),
-    database: { url: databaseUrl },
+    database: { url: databaseUrl, poolSize: int(process.env.DATABASE_POOL_SIZE, 20) },
     redis: { url: process.env.REDIS_URL ?? 'redis://localhost:6379' },
     booking: {
       lockTimeoutMs: int(process.env.BOOKING_LOCK_TIMEOUT_MS, 2000),
@@ -94,8 +124,11 @@ export function loadConfiguration(): AppConfig {
       leadHours: int(process.env.REMINDER_LEAD_HOURS, 24),
       bandHours: int(process.env.REMINDER_BAND_HOURS, 1),
     },
-    auth: {
-      enabled: bool(process.env.AUTH_ENABLED, true),
+    auth: authConfig(),
+    rateLimit: {
+      enabled: bool(process.env.RATE_LIMIT_ENABLED, nodeEnv !== 'test'),
+      windowMs: int(process.env.RATE_LIMIT_WINDOW_MS, 60_000),
+      max: int(process.env.RATE_LIMIT_MAX, 120),
     },
   };
 }

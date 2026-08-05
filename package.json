@@ -1,7 +1,7 @@
 {
   "name": "unified-service-scheduler",
   "version": "1.0.0",
-  "description": "Unified Service Scheduler \u2014 resource-constrained dealership service booking with DB-enforced no-double-booking",
+  "description": "Unified Service Scheduler — resource-constrained dealership service booking with DB-enforced no-double-booking",
   "author": "Dang Phuc Toan",
   "private": true,
   "license": "UNLICENSED",
@@ -29,8 +29,7 @@
     "test:integration": "jest --config test/jest.config.ts --selectProjects integration --runInBand",
     "test:concurrency": "jest --config test/jest.config.ts --selectProjects concurrency --runInBand",
     "test:e2e": "jest --config test/jest.config.ts --selectProjects e2e --runInBand",
-    "test:cov": "jest --config test/jest.config.ts --runInBand --coverage",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "test:cov": "jest --config test/jest.config.ts --runInBand --coverage"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -43,7 +42,7 @@
     "@nestjs/platform-express": "^11.1.6",
     "@nestjs/schedule": "^6.0.0",
     "@nestjs/swagger": "^11.2.0",
-    "@nestjs/terminus": "^11.0.0",
+    "@nestjs/throttler": "^6.5.0",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
     "canonicalize": "^2.1.0",

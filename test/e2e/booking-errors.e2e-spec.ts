@@ -104,6 +104,27 @@ describe('booking error catalog (§7.1)', () => {
       const res = await post(validBody({ endTime: '2026-09-07T23:00:00Z' }), 'duration-1');
       expect(res.status).toBe(400);
     });
+
+    it('rejects a desiredStartTime with no UTC offset, rather than reinterpreting it (§2, §6.7)', async () => {
+      // No trailing `Z`/offset — `new Date(...)` on this shape is host-timezone-dependent per
+      // ECMA-262, which would silently violate "all timestamps are UTC instants" on any host
+      // whose local TZ isn't UTC. Must be a 400, not a 201 against the wrong instant.
+      const res = await post(validBody({ desiredStartTime: '2026-09-07T02:00:00' }), 'no-tz-1');
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('accepts a numeric offset other than Z, since it is equally unambiguous', async () => {
+      // 09:00+07:00 is the same instant as VALID_SLOT (02:00Z) — proves the fix rejects missing
+      // offsets specifically, not offsets other than "Z".
+      const res = await post(
+        validBody({ desiredStartTime: '2026-09-07T09:00:00+07:00' }),
+        'tz-offset-1',
+      );
+
+      expect(res.status).toBe(201);
+    });
   });
 
   describe('404 NOT_FOUND — including out-of-tenant, with no existence leak (§14)', () => {

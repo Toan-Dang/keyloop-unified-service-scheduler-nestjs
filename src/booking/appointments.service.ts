@@ -4,24 +4,9 @@ import { AppException } from '../common/errors/app.exception';
 import { type Principal, PrincipalRole } from '../common/auth/principal';
 import { clampLimit, decodeCursor, encodeCursor } from '../common/pagination/keyset';
 import { PrismaService } from '../prisma/prisma.service';
+import { APPOINTMENT_COLUMNS } from './appointment-columns';
 import type { AppointmentRow } from './dto/appointment.response';
 import type { ListAppointmentsQueryDto } from './dto/list-appointments.dto';
-
-const APPOINTMENT_COLUMNS = `
-  id,
-  dealership_id   AS "dealershipId",
-  customer_id     AS "customerId",
-  vehicle_id      AS "vehicleId",
-  service_type_id AS "serviceTypeId",
-  technician_id   AS "technicianId",
-  service_bay_id  AS "serviceBayId",
-  start_time      AS "startTime",
-  end_time        AS "endTime",
-  status,
-  cancelled_at    AS "cancelledAt",
-  cancel_reason   AS "cancelReason",
-  created_at      AS "createdAt"
-`;
 
 export interface AppointmentPage {
   items: AppointmentRow[];
@@ -118,8 +103,8 @@ export class AppointmentsService {
    */
   async cancel(principal: Principal, id: string, reason?: string): Promise<AppointmentRow> {
     return this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRawUnsafe<{ id: string; status: string }[]>(
-        `SELECT id, status
+      const locked = await tx.$queryRawUnsafe<AppointmentRow[]>(
+        `SELECT ${APPOINTMENT_COLUMNS}
            FROM appointments
           WHERE id = $1::uuid
             AND dealership_id = $2::uuid
@@ -135,12 +120,9 @@ export class AppointmentsService {
 
       if (row.status === 'CANCELLED') {
         // Already cancelled: a no-op 200, never an ALREADY_CANCELLED error. A retried cancel is
-        // a success, not a conflict.
-        const rows = await tx.$queryRawUnsafe<AppointmentRow[]>(
-          `SELECT ${APPOINTMENT_COLUMNS} FROM appointments WHERE id = $1::uuid`,
-          id,
-        );
-        return rows[0]!;
+        // a success, not a conflict. The locked row already has every column, so there is
+        // nothing left to fetch.
+        return row;
       }
 
       const updated = await tx.$queryRawUnsafe<AppointmentRow[]>(

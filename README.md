@@ -45,13 +45,40 @@ N parallel POST /appointments for one Brake Inspection slot
 
 ## Quick start
 
-**Prerequisites:** Node.js 24 LTS, Docker, Docker Compose. No AWS account, no LocalStack, no
-cloud anything.
+**Runs identically on Windows, macOS, and Linux.** Every npm script is plain Node/Prisma/Jest —
+nothing shell-specific — so the commands below are the same on every OS except where noted.
+
+**Prerequisites:**
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Node.js | 24 LTS ([nvm-windows](https://github.com/coreybutler/nvm-windows) or the [official installer](https://nodejs.org)) | 24 LTS (`nvm` / `brew install node@24`) | 24 LTS (`nvm` or your distro's Node 24 package) |
+| Docker | **Docker Desktop** with the **WSL2 backend** enabled | Docker Desktop | Docker Engine + the Compose plugin (`docker compose version`) |
+| Shell | PowerShell, or a WSL2 Ubuntu terminal | Terminal (bash/zsh) | bash/zsh |
+
+No AWS account, no LocalStack, no cloud anything.
+
+> **Windows note:** run the commands from a **WSL2** shell if you have it (fastest disk I/O for
+> Postgres, and every command below works unmodified) or from **PowerShell** directly against
+> Docker Desktop. Native `cmd.exe` works too but needs `copy` instead of `cp` — see below. Avoid
+> running Docker Desktop with the Hyper-V-only backend; WSL2 is faster and is what this repo is
+> tested against.
 
 ```bash
 git clone <this-repo> && cd keyloop-unified-service-scheduler-nestjs
-cp .env.example .env
+```
 
+Copy the env file — the one command in this section that differs by shell:
+
+| Shell | Command |
+|---|---|
+| bash / zsh / WSL2 | `cp .env.example .env` |
+| PowerShell | `Copy-Item .env.example .env` (`cp` also works — it's aliased) |
+| `cmd.exe` | `copy .env.example .env` |
+
+Everything after this is identical on every OS:
+
+```bash
 docker compose up -d          # PostgreSQL 18 + Redis 8
 npm install
 npx prisma generate           # generate the typed client
@@ -183,11 +210,14 @@ mocked or emulated, and it is the thing under test. Testcontainers starts `postg
 automatically.
 
 > **If Docker is not reachable from your test process** (commonly: Docker Desktop with WSL
-> integration disabled), point the suites at the running compose stack instead:
+> integration disabled), point the suites at the running compose stack instead. The inline env-var
+> syntax differs by shell:
 >
-> ```bash
-> TEST_DATABASE_URL="postgresql://scheduler:scheduler_dev_pw@localhost:5432/scheduler" npm test
-> ```
+> | Shell | Command |
+> |---|---|
+> | bash / zsh / WSL2 | `TEST_DATABASE_URL="postgresql://scheduler:scheduler_dev_pw@localhost:5432/scheduler" npm test` |
+> | PowerShell | `$env:TEST_DATABASE_URL="postgresql://scheduler:scheduler_dev_pw@localhost:5432/scheduler"; npm test` |
+> | `cmd.exe` | `set "TEST_DATABASE_URL=postgresql://scheduler:scheduler_dev_pw@localhost:5432/scheduler" && npm test` |
 >
 > The proof is unchanged — still real PostgreSQL running the real constraint. CI uses the
 > Testcontainers path.
@@ -319,6 +349,9 @@ committed. The values the design pins are surfaced explicitly rather than buried
 | Postgres container restart-loops on first run | You have a stale volume from a pre-18 image. `docker compose down -v` then `up -d`. PG18 wants the mount at `/var/lib/postgresql`, not `.../data`. |
 | `prisma migrate dev` wants to drop constraints | Expected, and why you must not run it. Use `npm run db:migrate`. |
 | `openapi.yaml` differs in CI | Run `npm run openapi:generate` and commit the result. |
+| **Windows:** `docker compose up -d` fails or ports 5432/6379 are already in use | Another Postgres/Redis (often a native Windows install, or Hyper-V's reserved port range) is holding the port. Stop it, or override `POSTGRES_PORT`/`REDIS_PORT` in `.env` and `DATABASE_URL`/`REDIS_URL` to match. |
+| **Windows:** the repo lives under `/mnt/c/...` in WSL2 and everything feels slow | Cross-filesystem I/O (Windows disk ↔ WSL2) is slow for `node_modules` and Postgres's data volume. Clone the repo **inside** the WSL2 filesystem (e.g. `~/projects/...`), not under `/mnt/c`. |
+| **Windows (`cmd.exe`/PowerShell):** a script fails with `env: command not found` or similar shell-syntax errors | The npm scripts themselves are plain Node/Prisma/Jest and run unmodified; only the two commands in this README with inline `VAR=value` (env copy, `TEST_DATABASE_URL`) are shell-specific — use the PowerShell/`cmd.exe` variant given alongside each. |
 
 ---
 

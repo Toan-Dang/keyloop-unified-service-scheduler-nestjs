@@ -60,9 +60,3 @@ Each milestone lists **acceptance criteria** — do not move on until they pass.
 - Record the 5–10 min video: intro + scenario, design highlights (exclusion constraint, outbox, tenant scoping), AI collaboration story (1–2 min), live demo (run the concurrency test on camera), what you learned.
 
 **Acceptance:** a reviewer can `git clone` → `docker compose up` → run tests → see the concurrency proof, guided only by the README.
-
----
-
-### Priority if time runs short (16h budget)
-
-Must-have: M0–M4 + the concurrency test + README/AI-narrative + video. Nice-to-have: full M5 relay polish (an EventEmitter stub is enough), `GET /availability`, Redis fast-path (the DB backstop already guarantees idempotency), full metrics. Never cut: the exclusion constraints, the allocation loop, and the concurrency test — that is the whole point.

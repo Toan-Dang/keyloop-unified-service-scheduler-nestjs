@@ -11,6 +11,11 @@ concurrency:
 
 env:
   NODE_VERSION: '24'
+  # `prisma.config.ts` resolves DATABASE_URL via Prisma 7's `env()` helper, which throws if the
+  # var is unset — so `prisma generate` needs *a* value even though it never connects. Real test
+  # suites overwrite process.env.DATABASE_URL themselves once Testcontainers starts (see
+  # test/support/test-database.ts); this placeholder only satisfies config loading.
+  DATABASE_URL: 'postgresql://scheduler:scheduler_dev_pw@localhost:5432/scheduler?schema=public'
 
 jobs:
   static:

@@ -378,7 +378,7 @@ sequenceDiagram
 
     C->>API: POST /appointments/{id}/cancel
     API->>B: cancelAppointment(id)
-    B->>DB: BEGIN; SELECT status FROM appointment WHERE id=? FOR UPDATE
+    B->>DB: BEGIN, SELECT status FROM appointment WHERE id=? FOR UPDATE
     alt not found
         DB-->>B: no row
         B->>DB: ROLLBACK
